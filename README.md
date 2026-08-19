@@ -1,6 +1,236 @@
 # ZeroClaw Synology Chat Plugin
 
+> 🌏 **中文文档**：[`README.zh.md`](README.zh.md)（请点这里阅读中文版部署 + 配置说明）
+
 A [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) channel plugin that integrates with **Synology Chat** bots, enabling bidirectional messaging between users in Synology Chat and ZeroClaw-powered AI agents.
+
+---
+
+## Download the Plugin Binary
+
+Pre-built `synology_chat.wasm` is published via GitHub Releases — no local Rust toolchain required.
+
+👉 **Direct download link for the latest release:**
+```
+https://github.com/anlinxi/zeroclaw-synology-chat-plugin/releases/download/v0.1.0/synology_chat.wasm
+```
+
+Or grab it from the release page:
+https://github.com/anlinxi/zeroclaw-synology-chat-plugin/releases/tag/v0.1.0
+
+Asset information for `v0.1.0`:
+
+| Field | Value |
+|-------|-------|
+| File | `synology_chat.wasm` |
+| Size | 349,893 bytes (~342 KB) |
+| Target | `wasm32-wasip2` (WASI Preview 2 / component model) |
+| SHA reference | 342 KB release asset attached to tag `v0.1.0` |
+
+---
+
+## 1. Deployment — Where to Put the `.wasm` File
+
+### 1.1 Required Directory Layout
+
+ZeroClaw discovers plugins by scanning the directory configured in `[plugins] plugins_dir` (default **`~/.zeroclaw/plugins/`**) for subdirectories that contain both a `manifest.toml` and the wasm binary named in the manifest's `wasm_path`. Your installed plugin must look exactly like this:
+
+```
+~/.zeroclaw/                              ← ZeroClaw config root ("config_dir")
+├── zeroclaw.toml                         ← Main config file (you edit this)
+└── plugins/                              ← [plugins] plugins_dir (the default)
+    └── synology-chat/                    ← One subdirectory per plugin
+        ├── manifest.toml                 ← Copy from this git repository (required)
+        └── synology_chat.wasm            ← Release binary you downloaded
+                                            (filename MUST match wasm_path in manifest:
+                                             `synology_chat.wasm` with UNDERSCORE, not dash)
+```
+
+### 1.2 One-shot Installation Script
+
+Run the following on the machine that hosts ZeroClaw:
+
+```bash
+# (1) Create the plugin directory
+mkdir -p ~/.zeroclaw/plugins/synology-chat
+
+# (2) Grab the release binary
+curl -L -o ~/.zeroclaw/plugins/synology-chat/synology_chat.wasm \
+  https://github.com/anlinxi/zeroclaw-synology-chat-plugin/releases/download/v0.1.0/synology_chat.wasm
+
+# (3) Grab the manifest from the repo
+curl -L -o ~/.zeroclaw/plugins/synology-chat/manifest.toml \
+  https://raw.githubusercontent.com/anlinxi/zeroclaw-synology-chat-plugin/main/manifest.toml
+
+# (4) Verify
+ls -la ~/.zeroclaw/plugins/synology-chat/
+# Expected output:
+#   manifest.toml
+#   synology_chat.wasm   (~342KB)
+```
+
+> **Note for binary build users.** The default prebuilt installer ships ZeroClaw without the WASM plugin backend. To load this plugin you need a host binary compiled with the `plugins-wasm-cranelift` feature:
+> ```bash
+> cd zeroclaw
+> cargo build --release --features plugins-wasm-cranelift
+> ```
+
+---
+
+## 2. ZeroClaw Configuration — `zeroclaw.toml`
+
+The main config file lives at **`~/.zeroclaw/zeroclaw.toml`**. Two independent sections must be present:
+
+1. `[plugins]` → turns on the plugin loader
+2. `[channels.synology-chat.<alias>]` → configures this specific channel plugin
+
+### 2.1 Full Working Example
+
+```toml
+# ======================================================================
+# SECTION 1: Enable the WASM plugin system (OFF by default!)
+# ======================================================================
+[plugins]
+enabled = true                         # Master switch — must be true.
+auto_discover = true                   # Auto-scan plugins_dir on startup.
+plugins_dir = "~/.zeroclaw/plugins"    # Default; can be omitted if unchanged.
+max_plugins = 50
+
+# Signature policy. For a local plugin you compiled / downloaded yourself,
+# leave this at "disabled". Use "strict" only if you start signing manifests.
+[plugins.security]
+signature_mode = "disabled"            # disabled | permissive | strict
+
+# ======================================================================
+# SECTION 2: Synology Chat channel configuration
+#
+# Section name format:
+#   [channels.<provides>.<alias>]
+#   <provides> = manifest.toml  -> provides = "synology-chat"
+#   <alias>    = your free-form instance name ("default" for single NAS setups)
+# ======================================================================
+[channels.synology-chat.default]
+enabled = true
+
+# ── Required ───────────────────────────────────────────────────────
+# Synology Chat bot token (copy from DSM → Chat → Integration → Bot page).
+# Used for TWO things:  (a) verify inbound token on the webhook,
+#                       (b) build the outbound SYNO.Chat.External URL.
+bot_token = "YOUR_SYNOLOGY_CHAT_BOT_TOKEN"
+
+# Base URL of your Synology NAS: scheme + host + port, NO trailing slash.
+# If ZeroClaw runs ON the NAS itself you can write http://127.0.0.1:5000
+synology_base_url = "https://your-nas.example.com:5001"
+
+# ── Optional (documented defaults shown) ───────────────────────────
+# Fallback numeric user id for replies. Only used when the incoming
+# message has neither `user_id` nor `channel_id`. Set to 0 to omit the
+# `user_ids` array completely in that case.
+default_user_id = 0
+
+# Maximum UTF-8 characters per segment. Longer replies are split in a
+# line-aware manner; only individual oversized lines are hard-split.
+max_segment_length = 500
+
+# Minimum gap between consecutive segments, in milliseconds. Throttling
+# avoids triggering Synology's internal rate limiter.
+min_send_interval_ms = 500
+```
+
+### 2.2 Channel Configuration Reference
+
+| Field                    | Required | Default       | Description                                                                 |
+|--------------------------|----------|---------------|-----------------------------------------------------------------------------|
+| `enabled`                | No       | `false`       | Master switch for this channel alias.                                       |
+| `bot_token`              | **Yes**  | —             | Synology Chat bot token (DSM Chat integration page).                       |
+| `synology_base_url`      | **Yes**  | —             | NAS base URL. E.g. `https://nas.example.com:5001`.                          |
+| `default_user_id`        | No       | `0`           | Fallback numeric user id for replies. Only used when inbound context has no numeric target. |
+| `max_segment_length`     | No       | `500`         | Max UTF-8 chars per outgoing segment.                                       |
+| `min_send_interval_ms`   | No       | `500`         | Min interval between segments, in ms. Guards Synology rate limits.         |
+
+### 2.3 Multiple Instances (Channel Aliasing)
+
+Use a different alias per NAS / bot. Each alias gets its own webhook path.
+
+```toml
+[channels.synology-chat.home]
+enabled = true
+bot_token = "HOME_BOT_TOKEN"
+synology_base_url = "https://home-nas.local:5001"
+default_user_id = 4
+
+[channels.synology-chat.work]
+enabled = true
+bot_token = "WORK_BOT_TOKEN"
+synology_base_url = "https://work-nas.company.com:5001"
+default_user_id = 12
+```
+
+| Alias | Incoming webhook path on ZeroClaw |
+|-------|-----------------------------------|
+| `home` | `http(s)://<zc-host>:<port>/plugin/synology-chat-home` |
+| `work` | `http(s)://<zc-host>:<port>/plugin/synology-chat-work` |
+| `default` (special) | `http(s)://<zc-host>:<port>/plugin/synology-chat` (no `-default` suffix — matches built-in channel conventions) |
+
+---
+
+## 3. Synology DSM Side — Outgoing Webhook URL
+
+In DSM Chat → Bot Settings → **Outgoing Webhook**, point the URL directly at ZeroClaw's plugin webhook route:
+
+```
+http(s)://<zeroclaw-host>:<zc-port>/plugin/synology-chat
+```
+
+Where:
+- `<zeroclaw-host>` → hostname or IP of the machine running ZeroClaw (must be reachable from the NAS).
+- `<zc-port>` → ZeroClaw's HTTP listen port (see `zeroclaw.toml`).
+- If your alias is not `default`, append `-{alias}` e.g. `…/plugin/synology-chat-home`.
+
+Make sure firewalls and any reverse proxy between the NAS and ZeroClaw allow this connection.
+
+---
+
+## 4. Post-Install Verification
+
+```bash
+# Toggle the master switches via CLI (or edit the toml, same result)
+zeroclaw config set plugins.enabled true
+zeroclaw config set plugins.auto_discover true
+
+# Confirm the plugin is discovered
+zeroclaw plugin list
+# → you should see "synology-chat  v0.1.0  channel  http_client, config_read"
+
+# Inspect the loaded manifest
+zeroclaw plugin info synology-chat
+```
+
+If the plugin does **not** appear in `zeroclaw plugin list`, open the ZeroClaw startup log and look for `skip` / `warning` lines. The three most common reasons:
+
+| Startup warning | Root cause | Fix |
+|-----------------|------------|-----|
+| *malformed manifest* | `manifest.toml` missing or has invalid TOML syntax. | Re-download `manifest.toml`. |
+| *missing wasm_path file* | Directory has no `synology_chat.wasm` (note the underscore), or `manifest.toml` `wasm_path` does not match the real filename. | Verify both files exist side-by-side: `manifest.toml` + `synology_chat.wasm`. |
+| *signature policy rejected* | `plugins.security.signature_mode = "strict"` and the manifest is unsigned. | Switch to `disabled` or `permissive` for your local install. |
+
+---
+
+## 5. Quick Integration Reference Card
+
+| Item | Value / Path |
+|---|---|
+| Release binary (`synology_chat.wasm`) | https://github.com/anlinxi/zeroclaw-synology-chat-plugin/releases/download/v0.1.0/synology_chat.wasm |
+| Install directory | `~/.zeroclaw/plugins/synology-chat/{manifest.toml, synology_chat.wasm}` |
+| Default plugins directory | `~/.zeroclaw/plugins` (`[plugins] plugins_dir`) |
+| Plugin system switch | `[plugins] enabled = true` |
+| Auto-discovery switch | `[plugins] auto_discover = true` |
+| Signature policy recommendation (local) | `[plugins.security] signature_mode = "disabled"` |
+| Channel config section | `[channels.synology-chat.default]` |
+| Required channel keys | `bot_token`, `synology_base_url` |
+| Inbound webhook path (alias=default) | `http(s)://<zc-host>:<port>/plugin/synology-chat` |
+
+Once everything is in place, restart ZeroClaw, open a DM with your bot inside Synology Chat, and send it a message — the AI will reply in the same thread. 🚀
 
 ---
 
@@ -27,99 +257,6 @@ A [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) channel plugin that inte
   - All protocol logic lives in the pure-Rust `synology_chat` module and is host-tested (`cargo test` works without a browser/wasm runtime).
   - The wasm component shim (`lib.rs`) contains only IO and trait glue — easy to audit and extend.
   - 17 built-in unit + integration tests cover config, token verification, form parsing, splitting, and round-trip body encoding.
-
----
-
-## Configuration
-
-Add the following section to your ZeroClaw configuration file (e.g. `zeroclaw.toml`):
-
-```toml
-[channels.synology-chat.default]
-enabled = true
-
-# Bot token obtained when creating the Synology Chat bot.
-# Used for BOTH inbound request verification AND outbound API URL construction.
-bot_token = "YOUR_SYNOLOGY_CHAT_BOT_TOKEN"
-
-# Base URL of your Synology NAS (protocol + host + port, NO trailing slash).
-# The plugin appends `/webapi/entry.cgi?...` automatically.
-synology_base_url = "https://your-nas.example.com:5001"
-
-# (Optional) Fallback user id used when an inbound message carries no numeric
-# user_id / channel_id. 0 = do not attach user_ids for such messages.
-default_user_id = 0
-
-# (Optional) Maximum characters per outgoing segment. Default: 500.
-max_segment_length = 500
-
-# (Optional) Minimum gap between two consecutive segments, in milliseconds.
-# Default: 500.
-min_send_interval_ms = 500
-```
-
-### Configuration Reference
-
-| Field                    | Required | Default       | Description                                                                 |
-|--------------------------|----------|---------------|-----------------------------------------------------------------------------|
-| `enabled`                | No       | `false`       | Master switch for this channel.                                             |
-| `bot_token`              | **Yes**  | —             | Synology Chat bot token (from the DSM Chat integration page).              |
-| `synology_base_url`      | **Yes**  | —             | NAS base URL, e.g. `https://nas.example.com:5001`.                         |
-| `default_user_id`        | No       | `0`           | Fallback numeric user id for replies. Only used when the inbound context has no numeric target. |
-| `max_segment_length`     | No       | `500`         | Maximum UTF-8 character length per segment. Longer content is split.       |
-| `min_send_interval_ms`   | No       | `500`         | Minimum interval between segments, in ms. Protects Synology rate limits.   |
-
-### Channel Aliasing
-
-You can create multiple independent Synology Chat channels by using aliases:
-
-```toml
-[channels.synology-chat.work]
-enabled = true
-bot_token = "WORK_BOT_TOKEN"
-synology_base_url = "https://work-nas.local:5001"
-default_user_id = 12
-
-[channels.synology-chat.home]
-enabled = true
-bot_token = "HOME_BOT_TOKEN"
-synology_base_url = "https://home-nas.local:5001"
-default_user_id = 4
-```
-
-The webhook paths become `/plugin/synology-chat-work` and `/plugin/synology-chat-home` respectively.
-
----
-
-## Usage Workflow
-
-### 1. Install Synology Chat on DSM
-Open **Package Center** on your Synology NAS, search for **Synology Chat**, and install it.
-
-### 2. Create a Chat Bot
-1. Open **Synology Chat** and navigate to **Integration / Bots** (integrations page).
-2. Click **Create** → choose **Bot**.
-3. Fill in the bot's name, avatar, and description.
-4. Copy the generated **bot token** — you will need it for the `bot_token` config key.
-
-### 3. Configure the Outgoing Webhook
-In the same bot settings page, locate the **Outgoing Webhook** (传出 Webhook) section and set the target URL to:
-
-```
-http(s)://<zeroclaw-host>:<port>/plugin/synology-chat
-```
-
-- `<zeroclaw-host>` = hostname or IP of the machine running ZeroClaw.
-- `<port>` = ZeroClaw's HTTP listen port (see `zeroclaw.toml`).
-- If you use a channel alias, append `-{alias}` to the path, e.g. `/plugin/synology-chat-work`.
-
-> Ensure your NAS can reach this URL (firewall / reverse proxy rules).
-
-### 4. Update ZeroClaw Config
-Paste the `[channels.synology-chat.*]` section (shown above) into `zeroclaw.toml`, replacing `bot_token` and `synology_base_url` with your values.
-
-### 5. Restart & Test
-Restart ZeroClaw. Open a Synology Chat direct message with your bot and send a message. The AI should reply shortly. Check the ZeroClaw logs if you do not see a reply.
 
 ---
 
@@ -209,7 +346,7 @@ cargo build --target wasm32-wasip2 --release
 The compiled artifact is:
 
 ```
-target/wasm32-wasip2/release/synology-chat.wasm
+target/wasm32-wasip2/release/synology_chat.wasm
 ```
 
 ### Test
@@ -253,6 +390,8 @@ test result: ok. 4 passed; 0 failed
 | Replies truncated to one segment | Increase `max_segment_length` (Synology Chat's own limit is higher; 500 is a safe default). |
 | Rate-limit errors in logs | Increase `min_send_interval_ms` to 750 or 1000. |
 | Plugin fails to load | Ensure the `.wasm` was built with `--target wasm32-wasip2 --release` and copied to the plugins directory registered in `zeroclaw.toml`. |
+| `zeroclaw plugin list` shows nothing | Confirm `[plugins] enabled = true` AND `[plugins] auto_discover = true`; check startup log for `skip` warnings. |
+| `plugins.security.signature_mode=strict` rejects the plugin | Switch to `disabled` for unsigned local plugins, or sign the manifest before publishing. |
 
 ---
 
