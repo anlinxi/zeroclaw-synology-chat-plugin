@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target/
+target/
+
+# Cargo lock (application-level; lib crates may choose to track, upstream plugins ignore it)
+Cargo.lock
+
+# Compiled WebAssembly plugin artifacts
+*.wasm
+*.wasm2wat
+*.wat
+
+# Editor / IDE
+.vscode/
+.idea/
+*.iml
+.vs/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python (auxiliary scripts)
+__pycache__/
+*.pyc
+*.pyo
+
+# Local configuration overrides
+*.local.toml
+*.local
+.env
+.env.local

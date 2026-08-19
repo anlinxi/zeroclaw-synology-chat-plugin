@@ -1,0 +1,10 @@
+name = "synology-chat"
+version = "0.1.0"
+description = "Synology Chat channel plugin for ZeroClaw: webhook ingress + session-based outbound replies via the Synology Chat External API."
+author = "ZeroClaw Community"
+wasm_path = "synology_chat.wasm"
+capabilities = ["channel"]
+sender_match = "exact"
+registry = false
+permissions = ["http_client", "config_read"]
+provides = "synology-chat"
